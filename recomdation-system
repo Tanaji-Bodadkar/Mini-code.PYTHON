@@ -1,0 +1,80 @@
+##pip install numpy pandas scikit-surprise scikit-learn
+import pandas as pd
+from surprise import Dataset
+from surprise import Reader
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import linear_kernel
+
+# Load the MovieLens ratings dataset
+ratings_url = 'https://raw.githubusercontent.com/sidooms/MovieTweetings/master/latest/ratings.dat'
+ratings = pd.read_csv(ratings_url, sep='::', header=None, names=['user_id', 'movie_id', 'rating', 'timestamp'], engine='python')
+
+# Load the MovieLens movies dataset
+movies_url = 'https://raw.githubusercontent.com/sidooms/MovieTweetings/master/latest/movies.dat'
+movies = pd.read_csv(movies_url, sep='::', header=None, names=['movie_id', 'title', 'genres'], engine='python')
+
+# Prepare the data for Surprise (Collaborative Filtering)
+reader = Reader(rating_scale=(0.5, 5.0))
+data = Dataset.load_from_df(ratings[['user_id', 'movie_id', 'rating']], reader)
+
+from surprise import SVD
+from surprise.model_selection import train_test_split
+from surprise import accuracy
+from collections import defaultdict
+
+# Split the data into training and test sets
+trainset, testset = train_test_split(data, test_size=0.25)
+
+# Build the SVD model
+cf_model = SVD()
+
+# Train the model
+cf_model.fit(trainset)
+
+# Test the model
+predictions = cf_model.test(testset)
+print("Collaborative Filtering RMSE:", accuracy.rmse(predictions))
+
+# Function to get top-N recommendations for collaborative filtering
+def get_top_n(predictions, n=10):
+    '''Return the top-N recommendation for each user from a set of predictions.'''
+    top_n = defaultdict(list)
+    for uid, iid, true_r, est, _ in predictions:
+        top_n[uid].append((iid, est))
+    for uid, user_ratings in top_n.items():
+        user_ratings.sort(key=lambda x: x[1], reverse=True)
+        top_n[uid] = user_ratings[:n]
+    return top_n
+
+# Predict ratings for all pairs (user, item) that are NOT in the training set
+testset = trainset.build_anti_testset()
+predictions = cf_model.test(testset)
+top_n = get_top_n(predictions, n=10)
+# Transform genres into TF-IDF features
+tfidf = TfidfVectorizer(tokenizer=lambda x: x.split('|'))
+tfidf_matrix = tfidf.fit_transform(movies['genres'])
+
+# Compute the cosine similarity matrix
+cosine_sim = linear_kernel(tfidf_matrix, tfidf_matrix)
+
+# Function to get movie recommendations based on cosine similarity
+def get_recommendations(title, cosine_sim=cosine_sim):
+    idx = movies[movies['title'] == title].index[0]
+    sim_scores = list(enumerate(cosine_sim[idx]))
+    sim_scores = sorted(sim_scores, key=lambda x: x[1], reverse=True)
+    sim_scores = sim_scores[1:11]  # Get the scores of the 10 most similar movies
+    movie_indices = [i[0] for i in sim_scores]
+    return movies.iloc[movie_indices]# Example user preferences for collaborative filtering
+user_id = 1
+print(f"Top 10 collaborative filtering recommendations for user {user_id}:")
+for iid, est in top_n[user_id]:
+    movie_title = movies[movies['movie_id'] == iid]['title'].values[0]
+    print(f"Movie ID: {iid}, Title: {movie_title}, Estimated Rating: {est}")
+
+# Example content-based filtering recommendations
+example_movie_title = 'Toy Story (1995)'
+print(f"\nTop 10 content-based recommendations similar to '{example_movie_title}':")
+recommendations = get_recommendations(example_movie_title)
+for idx, row in recommendations.iterrows():
+    print(f"Movie ID: {row['movie_id']}, Title: {row['title']}, Genres: {row['genres']}")
+
